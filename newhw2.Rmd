@@ -1,0 +1,570 @@
+---
+title: "newhw2"
+author: "Amanda Moeller"
+date: "3/31/2021"
+output: html_document
+---
+
+Packages
+```{r}
+library(readstata13)
+library(mlr)
+library(tidyverse)
+library(MLmetrics)
+library(dplyr)
+library(aod)
+library(ggplot2)
+library(tidyr)
+library(base)
+
+#svm stuff
+library(knitr)
+library(e1071)
+library(caTools)
+
+
+
+```
+
+Bring in the data
+```{r}
+# the dataset:
+data <- read.csv("/Users/amandamoeller/Desktop/SIOP21/2021_latestdata.csv")
+
+head(data)
+names(data)
+    
+# rename some of the longer variables:
+data$relig_viol <- data$Religious.Violence..1...Religious...Violent..2...Non.Religious...Violent..3...Religious...Non.Violent..4...Non.Religious...Non.Violent.
+
+data$relig <- data$Group.religiousness..Non.religious.0..religious.1.
+
+data$viol <- data$Group.violence..0.nonviolent..1.violent.
+
+head(data)
+
+
+# make dv (type_bi) a factor
+data$type_bi <- as.factor(data$type_bi)
+
+df <- data
+
+# more data cleaning stuff
+df$Group <- as.factor(df$Group)
+df$relig <- as.factor(df$relig)
+df$viol <- as.factor(df$viol)
+df$relig_viol <- as.factor(df$relig_viol)
+
+# make the factors easier to interpret
+df$relig <- ifelse(test=df$relig == 0, yes="Not Religious", no="Religious")
+df$relig <- as.factor(df$relig)
+
+df$viol <- ifelse(test=df$viol == 0, yes="Not Violent", no="Violent")
+df$viol <- as.factor(df$viol)
+
+# how many NAs in the data?
+nrow(df[is.na(df$type_bi) | is.na(df$power),])
+# no missing values! (checked for nach, naff, npow, relig_viol, type_bi)
+
+nrow(df) # 151 documents
+
+# need to make IVs (aff, ach, pow) numeric again
+# get mean and sd
+# low = below mean, high = above mean
+
+df$aff <- as.numeric(df$aff)
+df$ach <- as.numeric(df$ach)
+df$pow <- as.numeric(df$pow)
+
+mean(df$aff) # mean=3.69
+mean(df$ach) # mean=1.67
+mean(df$pow) # mean=4.46
+
+df$aff2 <- df$aff
+df$ach2 <- df$ach
+df$pow2 <- df$pow
+
+df$aff2[df$aff2>=3.69] <- "high_aff"
+df$aff2[df$aff2<3.69] <- "low_aff"
+df$aff2
+
+df$ach2[df$ach2>=1.67] <- "high_ach"
+df$ach2[df$ach2<1.67] <- "low_ach"
+df$ach2
+
+df$pow2[df$pow2>=4.46] <- "high_pow"
+df$pow2[df$pow2<4.46] <- "low_pow"
+df$pow2
+
+# make affiliation, achieve, power factors:
+df$aff2<- as.factor(df$aff2)
+df$ach2 <- as.factor(df$ach2)
+df$pow2 <- as.factor(df$pow2)
+
+```
+
+
+First, logistic regression
+Predict terrorist/non using nAch, nAff, nPow scores
+
+Split the data
+```{r}
+# 70% training set:
+smp_size <- floor(0.7 * nrow(df))
+
+# set the seed for reproducibility
+set.seed(1234)
+train_ind <- sample(seq_len(nrow(df)), size = smp_size)
+
+train70 <- df[train_ind, ] # 70% training df 
+test30 <- df[-train_ind, ] # 30% testing df 
+```
+
+Run the glm model on train70
+```{r}
+train70$relig <- as.numeric(train70$relig)
+
+model <- glm(type_bi ~ aff2 + ach2 + pow2 + relig,
+                data=train70, family="binomial")
+summary(model)
+
+# Only relig is significant
+# AIC 147.17
+
+anova(model, test="Chisq")
+
+library(pscl)
+pR2(model)
+```
+
+Assess predictive ability of the model on test30
+```{r}
+test30$relig <- as.numeric(test30$relig)
+
+fitted.results <- predict(model,
+                          newdata=subset(test30,select=c(
+                            1,20,25,26,27)),
+                          type='response')
+
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != test30$type_bi)
+logit_acc <- print(paste('Accuracy',1-misClasificError))
+logit_acc
+
+# Accuracy = 0.71 (not bad!)
+
+```
+
+
+
+Split the data into 70% training and 30% test sets. Use the training set alone for this part of the exercise. Evaluating performance via cross-validation, identify a support vector machine, random forest, and neural network that you think perform well in predicting the dependent variable, using the same independent variables, or a subset thereof, used in the model replicated for Question 1.
+
+# helpful: https://stats.idre.ucla.edu/r/dae/logit-regression/
+
+
+
+Cross-validation SVM with training set to predict 
+```{r}
+library(e1071)
+
+# add relig into the model
+
+mymodel <- svm(type_bi~ ach2 + aff2 + pow2 + relig,
+    data=train70)
+
+summary(mymodel)
+
+#Confusion matrix:
+pred <- predict(mymodel, train70)
+tab <- table(Predicted=pred, Actual=train70$type_bi)
+tab
+
+# 25 non-terrorist correctly predicted
+# 50 terrorist correctly predicted
+
+# 19 non-terrorist incorrectly predicted
+# 11 terrorist incorrectly predicted
+
+
+1-sum(diag(tab))/sum(tab) # misclassification = 0.29
+
+# adding violence into the model makes it better!
+
+fitted.results2 <- predict(mymodel,
+                          newdata=subset(test30,select=c(
+                            1,20,25,26,27)),
+                          type='response')
+
+misClasificError2 <- mean(fitted.results2 != test30$type_bi)
+svm_acc <- print(paste('Accuracy',1-misClasificError2))
+svm_acc
+
+# SVM accuracy = 0.76 (higher than logit)
+
+```
+
+Random forest:
+```{r}
+library(randomForest)
+require(caTools)
+
+rf <- randomForest(
+  type_bi ~ ach2 + aff2 + pow2 + relig,
+  data=train70)
+
+print(rf)
+#OOB estimate of  error rate: 34.29%
+#Confusion matrix:
+  # 0  1 class.error
+#0 25 19   0.4318182
+#1 17 44   0.2786885
+
+pred = predict(rf, newdata=test30, select=c(1,20,25,26,27))
+
+cm=table(test30[,1], pred)
+cm
+  # pred
+  #   0  1
+#  0 11  5
+#  1  6 24
+
+misClasificError3 <- mean(pred != test30$type_bi)
+rf_acc <- print(paste('Accuracy',1-misClasificError3))
+rf_acc
+
+# Accuracy = 0.76
+
+```
+
+
+Neural network
+```{r}
+library(neuralnet)
+
+train70$relig2 <- as.numeric(train70$relig)
+test30$relig2 <- as.numeric(test30$relig)
+
+# fit neural network
+nn=neuralnet(type_bi ~ ach + aff + pow + relig, data=train70,
+             hidden=3, act.fct="logistic", linear.output = FALSE)
+plot(nn)
+
+# predict results for test set
+predictnn=compute(nn,test30)
+predictnn$net.result
+
+
+#
+
+prednn = predict(nn, newdata=test30, select=c(1,20,26,27,28))
+
+cm=table(test30[,1], prednn)
+cm
+
+nn_acc <- (11+24)/(nrow(test30))
+nn_acc # 0.76
+
+
+
+```
+
+Which model fits the test data best?
+```{r}
+logit_acc # 0.72
+
+svm_acc # 0.76
+
+rf_acc # 0.76
+
+nn_acc # 0.71
+
+```
+
+For each method---logistic regression, SVM, random forests, and neural networks, use the full data to evaluate the importance of each variable in terms of its contribution to the predictive performance of the model.
+
+
+Removing variables from logistic regression model:
+```{r}
+## summary of below:
+# acc without viol: 0.62
+# acc without aff: 0.50
+# acc without ach: 0.52
+# acc without pow: 0.54
+# (acc with all: 0.72)
+
+# seems that we lose the most accuracy when removing aff, the least when removing viol
+
+
+logitmodel <- glm(type_bi ~ aff2 + ach2 + pow2 + relig,
+                data=df, family="binomial")
+summary(logitmodel)
+
+# logit without viol: 0.62
+modeldf <- glm(type_bi ~ aff2 + ach2 + pow2,
+                data=train70, family="binomial")
+summary(model)
+
+fitted.results <- predict(modeldf,
+                          newdata=subset(df,select=c(
+                            1,25,26,27)),
+                          type='response')
+
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != test30$type_bi)
+logit_acc <- print(paste('Accuracy',1-misClasificError))
+logit_acc
+
+# logit without aff: 0.50
+
+df$relig <- as.numeric(df$relig)
+
+modeldf <- glm(type_bi ~ relig + ach2 + pow2,
+                data=train70, family="binomial")
+summary(model)
+
+fitted.results <- predict(modeldf,
+                          newdata=subset(df,select=c(
+                            1,20,26,27)),
+                          type='response')
+
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != test30$type_bi)
+logit_acc <- print(paste('Accuracy',1-misClasificError))
+logit_acc
+
+# logit without ach: 0.52
+modeldf <- glm(type_bi ~ relig + aff2 + pow2,
+                data=train70, family="binomial")
+summary(model)
+
+fitted.results <- predict(modeldf,
+                          newdata=subset(df,select=c(
+                            1,20,25,27)),
+                          type='response')
+
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != test30$type_bi)
+logit_acc <- print(paste('Accuracy',1-misClasificError))
+logit_acc
+
+# logit without pow: 0.54
+modeldf <- glm(type_bi ~ relig + aff2 + ach2,
+                data=train70, family="binomial")
+summary(model)
+
+fitted.results <- predict(modeldf,
+                          newdata=subset(df,select=c(
+                            1,20,25,26)),
+                          type='response')
+
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != test30$type_bi)
+logit_acc <- print(paste('Accuracy',1-misClasificError))
+logit_acc
+
+
+
+
+
+```
+
+
+
+Removing variables from SVM model: 
+```{r}
+## summary of below:
+# acc without ach: 0.73
+# acc without aff: 0.73
+# acc without pow: 0.67
+# acc without relig: 0.65
+# (total = 0.76)
+
+# We lose more accuracy when removing relig and pow than ach and aff
+
+# svm without ach: 0.73
+svmmodel <- svm(type_bi~ + aff2 + pow2 + relig,
+    data=train70)
+fitted.results2 <- predict(svmmodel,
+                          newdata=subset(df,select=c(
+                            1,20,25,27)),
+                          type='response')
+
+misClasificError2 <- mean(fitted.results2 != df$type_bi)
+svm_acc <- print(paste('Accuracy',1-misClasificError2))
+svm_acc
+
+# svm without aff: 0.73
+svmmodel <- svm(type_bi~ + ach2 + pow2 + relig,
+    data=train70)
+fitted.results2 <- predict(svmmodel,
+                          newdata=subset(df,select=c(
+                            1,20,26,27)),
+                          type='response')
+
+misClasificError2 <- mean(fitted.results2 != df$type_bi)
+svm_acc <- print(paste('Accuracy',1-misClasificError2))
+svm_acc
+
+
+# svm without pow: 0.67
+svmmodel <- svm(type_bi~ + ach2 + aff2 + relig,
+    data=train70)
+fitted.results2 <- predict(svmmodel,
+                          newdata=subset(df,select=c(
+                            1,20,26,25)),
+                          type='response')
+
+misClasificError2 <- mean(fitted.results2 != df$type_bi)
+svm_acc <- print(paste('Accuracy',1-misClasificError2))
+svm_acc
+
+# svm without relig: 0.65
+svmmodel <- svm(type_bi~ + ach2 + aff2 + pow2,
+    data=train70)
+fitted.results2 <- predict(svmmodel,
+                          newdata=subset(df,select=c(
+                            1,27,26,25)),
+                          type='response')
+
+misClasificError2 <- mean(fitted.results2 != df$type_bi)
+svm_acc <- print(paste('Accuracy',1-misClasificError2))
+svm_acc
+
+
+```
+
+Removing variables from Random Forest 
+```{r}
+## summary of below:
+# acc without ach: 0.73
+# acc without aff: 0.73
+# acc without pow: 0.70
+# acc without relig: 0.66
+# (total = 0.76)
+
+# removing relig reduced the accuracy of the model more than three motive scores
+
+
+# rf without ach: 0.73
+rf <- randomForest(
+  type_bi ~ aff2 + pow2 + relig,
+  data=train70)
+
+pred = predict(rf, newdata=df, select=c(1,20,25,27))
+
+misClasificError3 <- mean(pred != df$type_bi)
+rf_acc <- print(paste('Accuracy',1-misClasificError3))
+rf_acc
+
+# rf without aff: 0.73
+rf <- randomForest(
+  type_bi ~ ach2 + pow2 + relig,
+  data=train70)
+
+pred = predict(rf, newdata=df, select=c(1,20,26,27))
+
+misClasificError3 <- mean(pred != df$type_bi)
+rf_acc <- print(paste('Accuracy',1-misClasificError3))
+rf_acc
+
+# rf without pow: 0.70
+rf <- randomForest(
+  type_bi ~ ach2 + aff2+ relig,
+  data=train70)
+
+pred = predict(rf, newdata=df, select=c(1,20,26,25))
+
+misClasificError3 <- mean(pred != df$type_bi)
+rf_acc <- print(paste('Accuracy',1-misClasificError3))
+rf_acc
+
+# rf without relig: 0.66
+rf <- randomForest(
+  type_bi ~ ach2 + aff2+ pow2,
+  data=train70)
+
+pred = predict(rf, newdata=df, select=c(1,27,26,25))
+
+misClasificError3 <- mean(pred != df$type_bi)
+rf_acc <- print(paste('Accuracy',1-misClasificError3))
+rf_acc
+
+```
+
+Removing variables from neural net
+```{r}
+## summary of below:
+# acc without ach: .64
+# acc without aff: .62
+# acc without pow: .66
+# acc without relig: .67
+# total model acc: .71
+
+# All are similar, but removing aff lowers accuracy the most and relig lowers accuracy the least
+
+
+
+# whole model:
+library(caTools)
+library(caret)
+
+
+train_params <- trainControl(method = "repeatedcv", number = 10, repeats=5)
+nnet_model <- train(train70$type_bi ~ train70$ach2 + train70$aff2 + train70$pow2 + train70$relig,
+                    data=train70,
+                 method = "nnet",
+                 trControl= train_params,
+                 preProcess=c("scale","center"),
+                 na.action = na.omit
+)
+
+# final value = 63.86
+
+
+# nn without ach: 64.22
+train_params <- trainControl(method = "repeatedcv", number = 10, repeats=5)
+nnet_model <- train(train70$type_bi ~  train70$aff2 + train70$pow2 + train70$relig,
+                    data=train70,
+                 method = "nnet",
+                 trControl= train_params,
+                 preProcess=c("scale","center"),
+                 na.action = na.omit
+)
+
+# nn without aff: 61.77
+train_params <- trainControl(method = "repeatedcv", number = 10, repeats=5)
+nnet_model <- train(train70$type_bi ~  train70$ach2 + train70$pow2 + train70$relig,
+                    data=train70,
+                 method = "nnet",
+                 trControl= train_params,
+                 preProcess=c("scale","center"),
+                 na.action = na.omit
+)
+
+
+# nn without pow: 65.70
+train_params <- trainControl(method = "repeatedcv", number = 10, repeats=5)
+nnet_model <- train(train70$type_bi ~  train70$ach2 + train70$aff2 + train70$relig,
+                    data=train70,
+                 method = "nnet",
+                 trControl= train_params,
+                 preProcess=c("scale","center"),
+                 na.action = na.omit
+)
+
+# nn without relig: 66.82
+train_params <- trainControl(method = "repeatedcv", number = 10, repeats=5)
+nnet_model <- train(train70$type_bi ~  train70$ach2 + train70$aff2 + train70$pow2,
+                    data=train70,
+                 method = "nnet",
+                 trControl= train_params,
+                 preProcess=c("scale","center"),
+                 na.action = na.omit
+)
+
+
+```
+
+
+
+
